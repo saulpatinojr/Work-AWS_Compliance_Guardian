@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68,<75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "continuous-compliance-guardian"
+version = "0.1.0"
+description = "Typed domain contracts and safety-boundary ports for the CCG POC"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

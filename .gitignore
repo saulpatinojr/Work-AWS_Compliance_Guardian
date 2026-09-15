@@ -10,3 +10,6 @@ __pycache__/
 .venv/
 node_modules/
 .next/
+out/
+*.tsbuildinfo
+.terraform.lock.hcl.*

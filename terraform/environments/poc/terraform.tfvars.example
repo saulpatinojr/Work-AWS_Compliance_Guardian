@@ -1,0 +1,5 @@
+aws_region           = "us-east-1"
+name_prefix          = "ccg-poc"
+environment          = "sandbox"
+audit_expiration_days = 30
+log_retention_days    = 7

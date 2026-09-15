@@ -1,15 +1,67 @@
 name: ci
-on: [pull_request, push]
-permissions: { contents: read }
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
 jobs:
-  validate:
+  terraform:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+      - run: terraform -chdir=terraform/environments/poc fmt -check -recursive
+      - run: terraform -chdir=terraform/environments/poc init -backend=false -input=false
+      - run: terraform -chdir=terraform/environments/poc validate
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.59.1
+      - run: tflint --init
+      - run: tflint --chdir=terraform/environments/poc
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.12' }
-      - run: terraform -chdir=terraform fmt -check -recursive
-      - run: terraform -chdir=terraform init -backend=false
-      - run: terraform -chdir=terraform validate
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install "ruff==0.11.13" "pytest==8.3.5"
+      - run: ruff check src tests
+      - run: pytest -q
+      - run: python scripts/validate_policy_baseline.py
       - run: python scripts/seed_drift.py --help
+
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.11.1"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm audit --omit=dev
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: trufflesecurity/trufflehog@v3.90.5
+        with:
+          extra_args: --results=verified,unknown
