@@ -15,14 +15,14 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.15.8
-      - run: terraform -chdir=terraform/environments/poc fmt -check -recursive
-      - run: terraform -chdir=terraform/environments/poc init -backend=false -input=false
-      - run: terraform -chdir=terraform/environments/poc validate
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
       - uses: terraform-linters/setup-tflint@v4
         with:
           tflint_version: v0.59.1
       - run: tflint --init
-      - run: tflint --chdir=terraform/environments/poc
+      - run: tflint
 
   python:
     runs-on: ubuntu-latest
