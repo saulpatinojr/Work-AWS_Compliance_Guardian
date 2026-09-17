@@ -20,12 +20,25 @@ here; persistence is via the injected `FindingRepository`.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from .contracts import AuditEvent, Finding, FindingStatus, ToolOutcome
 from .ports import AuditSink, FindingRepository
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileContext:
+    """Who/why context threaded through a reconciliation step.
+
+    Bundles the correlation fields every transition needs so lifecycle methods
+    stay small and callers pass one value instead of three positional args.
+    """
+
+    actor: str
+    correlation_id: str
+    request_id: str
 
 # Explicit, monotonic-enough lifecycle. Each key lists the statuses a finding
 # may move to from that key. Self-transitions are allowed where they represent
@@ -92,34 +105,22 @@ class ReconciliationService:
 
     # --- lifecycle steps -------------------------------------------------
 
-    def mark_requested(self, finding_id: str, *, actor: str, correlation_id: str, request_id: str) -> Finding:
+    def mark_requested(self, finding_id: str, context: ReconcileContext) -> Finding:
         """Record that a remediation was requested for a finding."""
         return self._transition(
             finding_id,
             FindingStatus.REMEDIATION_REQUESTED,
-            actor=actor,
-            correlation_id=correlation_id,
-            request_id=request_id,
+            context,
             event_type="reconcile.requested",
         )
 
-    def record_tool_outcome(
-        self,
-        finding_id: str,
-        outcome: ToolOutcome,
-        *,
-        actor: str,
-        correlation_id: str,
-        request_id: str,
-    ) -> Finding:
+    def record_tool_outcome(self, finding_id: str, outcome: ToolOutcome, context: ReconcileContext) -> Finding:
         """Record what the tool reported. This never resolves the finding."""
         target = _TOOL_OUTCOME_TO_STATUS[outcome]
         return self._transition(
             finding_id,
             target,
-            actor=actor,
-            correlation_id=correlation_id,
-            request_id=request_id,
+            context,
             event_type="reconcile.tool_outcome",
             details={"tool_outcome": outcome.value},
         )
@@ -127,11 +128,9 @@ class ReconciliationService:
     def confirm_from_discovery(
         self,
         finding_id: str,
+        context: ReconcileContext,
         *,
         drift_still_present: bool,
-        actor: str = "discovery-agent",
-        correlation_id: str,
-        request_id: str,
     ) -> Finding:
         """Apply a confirming discovery read.
 
@@ -152,9 +151,7 @@ class ReconciliationService:
         return self._transition(
             finding_id,
             FindingStatus.RESOLVED,
-            actor=actor,
-            correlation_id=correlation_id,
-            request_id=request_id,
+            context,
             event_type="reconcile.resolved",
             details={"confirmed_by": "discovery_read"},
         )
@@ -171,10 +168,8 @@ class ReconciliationService:
         self,
         finding_id: str,
         target: FindingStatus,
+        context: ReconcileContext,
         *,
-        actor: str,
-        correlation_id: str,
-        request_id: str,
         event_type: str,
         details: dict | None = None,
     ) -> Finding:
@@ -190,9 +185,9 @@ class ReconciliationService:
                 AuditEvent(
                     event_id=str(uuid4()),
                     event_type=event_type,
-                    actor=actor,
-                    request_id=request_id,
-                    correlation_id=correlation_id,
+                    actor=context.actor,
+                    request_id=context.request_id,
+                    correlation_id=context.correlation_id,
                     outcome=target.value,
                     occurred_at=datetime.now(timezone.utc),
                     details={

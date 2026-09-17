@@ -4,6 +4,7 @@ import unittest
 from ccg.contracts import Finding, FindingStatus, Severity, TargetRef, ToolOutcome
 from ccg.reconcile import (
     IllegalTransitionError,
+    ReconcileContext,
     ReconciliationError,
     ReconciliationService,
     is_allowed_transition,
@@ -44,62 +45,57 @@ class ReconciliationServiceTests(unittest.TestCase):
         self.svc = ReconciliationService(self.repo, self.audit)
         self.repo.upsert(open_finding())
 
-    def _kw(self):
-        return {"actor": "admin", "correlation_id": "corr-1", "request_id": "req-1"}
+    def _ctx(self, correlation_id="corr-1", request_id="req-1") -> ReconcileContext:
+        return ReconcileContext(actor="admin", correlation_id=correlation_id, request_id=request_id)
+
+    def _confirm_ctx(self) -> ReconcileContext:
+        return ReconcileContext(actor="discovery-agent", correlation_id="corr-2", request_id="rec-1")
 
     def test_mark_requested_records_status(self) -> None:
-        result = self.svc.mark_requested("f-1", **self._kw())
+        result = self.svc.mark_requested("f-1", self._ctx())
         self.assertEqual(result.status, FindingStatus.REMEDIATION_REQUESTED)
         self.assertEqual(self.audit.events[-1].event_type, "reconcile.requested")
 
     def test_success_needs_confirming_read_to_resolve(self) -> None:
-        self.svc.mark_requested("f-1", **self._kw())
-        after_tool = self.svc.record_tool_outcome("f-1", ToolOutcome.APPLIED, **self._kw())
+        self.svc.mark_requested("f-1", self._ctx())
+        after_tool = self.svc.record_tool_outcome("f-1", ToolOutcome.APPLIED, self._ctx())
         self.assertEqual(after_tool.status, FindingStatus.REMEDIATION_SUCCEEDED)  # not RESOLVED yet
 
-        resolved = self.svc.confirm_from_discovery(
-            "f-1", drift_still_present=False, correlation_id="corr-2", request_id="rec-1"
-        )
+        resolved = self.svc.confirm_from_discovery("f-1", self._confirm_ctx(), drift_still_present=False)
         self.assertEqual(resolved.status, FindingStatus.RESOLVED)
 
     def test_drift_still_present_does_not_resolve(self) -> None:
-        self.svc.mark_requested("f-1", **self._kw())
-        self.svc.record_tool_outcome("f-1", ToolOutcome.APPLIED, **self._kw())
-        still = self.svc.confirm_from_discovery(
-            "f-1", drift_still_present=True, correlation_id="corr-2", request_id="rec-1"
-        )
+        self.svc.mark_requested("f-1", self._ctx())
+        self.svc.record_tool_outcome("f-1", ToolOutcome.APPLIED, self._ctx())
+        still = self.svc.confirm_from_discovery("f-1", self._confirm_ctx(), drift_still_present=True)
         self.assertEqual(still.status, FindingStatus.REMEDIATION_SUCCEEDED)
 
     def test_failed_outcome_never_resolves_on_clean_read(self) -> None:
-        self.svc.mark_requested("f-1", **self._kw())
-        self.svc.record_tool_outcome("f-1", ToolOutcome.FAILED, **self._kw())
-        result = self.svc.confirm_from_discovery(
-            "f-1", drift_still_present=False, correlation_id="corr-2", request_id="rec-1"
-        )
+        self.svc.mark_requested("f-1", self._ctx())
+        self.svc.record_tool_outcome("f-1", ToolOutcome.FAILED, self._ctx())
+        result = self.svc.confirm_from_discovery("f-1", self._confirm_ctx(), drift_still_present=False)
         self.assertEqual(result.status, FindingStatus.REMEDIATION_FAILED)
 
     def test_noop_outcome_resolves_on_clean_read(self) -> None:
-        self.svc.mark_requested("f-1", **self._kw())
-        self.svc.record_tool_outcome("f-1", ToolOutcome.NOOP, **self._kw())
-        result = self.svc.confirm_from_discovery(
-            "f-1", drift_still_present=False, correlation_id="corr-2", request_id="rec-1"
-        )
+        self.svc.mark_requested("f-1", self._ctx())
+        self.svc.record_tool_outcome("f-1", ToolOutcome.NOOP, self._ctx())
+        result = self.svc.confirm_from_discovery("f-1", self._confirm_ctx(), drift_still_present=False)
         self.assertEqual(result.status, FindingStatus.RESOLVED)
 
     def test_illegal_transition_is_rejected(self) -> None:
         # OPEN -> SUCCEEDED is not a legal step (must go through REQUESTED).
         with self.assertRaises(IllegalTransitionError):
-            self.svc.record_tool_outcome("f-1", ToolOutcome.APPLIED, **self._kw())
+            self.svc.record_tool_outcome("f-1", ToolOutcome.APPLIED, self._ctx())
 
     def test_repeated_request_is_idempotent_no_audit_noise(self) -> None:
-        self.svc.mark_requested("f-1", **self._kw())
+        self.svc.mark_requested("f-1", self._ctx())
         events_after_first = len(self.audit.events)
-        self.svc.mark_requested("f-1", **self._kw())  # same status again
+        self.svc.mark_requested("f-1", self._ctx())  # same status again
         self.assertEqual(len(self.audit.events), events_after_first)
 
     def test_missing_finding_raises(self) -> None:
         with self.assertRaises(ReconciliationError):
-            self.svc.mark_requested("does-not-exist", **self._kw())
+            self.svc.mark_requested("does-not-exist", self._ctx())
 
 
 if __name__ == "__main__":

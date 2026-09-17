@@ -36,7 +36,7 @@ from .contracts import (
     TargetRef,
 )
 from .policy import InMemoryPolicyControlPlane, PolicyActivationService
-from .reconcile import ReconciliationService
+from .reconcile import ReconcileContext, ReconciliationService
 from .testing import (
     InMemoryCedarGateway,
     InMemoryFindingRepository,
@@ -138,21 +138,14 @@ def run_demo() -> DemoResult:
         gateway.activate_permits(activation.state.policy_set_version)
 
     # Record remediation intent through the reconciler (lifecycle authority).
-    reconciler.mark_requested(
-        finding.finding_id, actor="admin", correlation_id="corr-demo", request_id="req-demo-1"
-    )
+    rec_ctx = ReconcileContext(actor="admin", correlation_id="corr-demo", request_id="req-demo-1")
+    reconciler.mark_requested(finding.finding_id, rec_ctx)
 
     # 4. Allow + single execution.
     allowed = api.request_remediation(admin, command())
     tool_executions = 1 if (allowed.tool_result and allowed.tool_result.changed) else 0
     if allowed.tool_result is not None:
-        reconciler.record_tool_outcome(
-            finding.finding_id,
-            allowed.tool_result.outcome,
-            actor="admin",
-            correlation_id="corr-demo",
-            request_id="req-demo-1",
-        )
+        reconciler.record_tool_outcome(finding.finding_id, allowed.tool_result.outcome, rec_ctx)
 
     # 5. Idempotent replay.
     replay = api.request_remediation(admin, command())
@@ -163,9 +156,8 @@ def run_demo() -> DemoResult:
     DiscoveryCoordinator([StaticDiscoverySource("config", [])], repo, audit).run("corr-demo-2")
     reconciler.confirm_from_discovery(
         finding.finding_id,
+        ReconcileContext(actor="discovery-agent", correlation_id="corr-demo-2", request_id="reconcile-demo-1"),
         drift_still_present=False,
-        correlation_id="corr-demo-2",
-        request_id="reconcile-demo-1",
     )
 
     final: Finding = repo.get(finding.finding_id)  # type: ignore[assignment]
